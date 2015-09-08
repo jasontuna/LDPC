@@ -1,6 +1,6 @@
 module LDPC
 
-export minvmod, bec, bsc, bdc, biawgn, ldpcH, calc_lamrho, calc_erasure_thresh, calc_H, calc_G, isCW, lc_end, swap_row, swap_col,calc_RU, ldpcRUenc, ell,bec_MPD, biawgn_MPD,bsc_MPD
+export minvmod, bec, bsc, bdc, biawgn, ldpcH, calc_lamrho, calc_erasure_thresh, calc_H, calc_G, isCW, lc_end, swap_row, swap_col,calc_RU, ldpcRUenc, ell,bec_MPD, biawgn_MPD,bsc_MPD,calc_girth,calc_mcycle
 
 
 
@@ -421,6 +421,156 @@ function ell(dv,dc,n)
     
 end
 
+##########################################################################
+
+function calc_mcycle(LH::ldpcH,sv::Int64,maxc::Int64)
+    #LH is a parity check matrix
+    #sv is a source variable node
+    #maxc is the maximum cycle length for which to search.
+    n=LH.n
+    m=LH.m
+    
+    #first n entries are variable node, 
+    #next m entries are check nodes
+    R=zeros(Int64,n+m) # stores two stages of traversing graph
+    S=zeros(Int64,n+m) 
+    Prnt=zeros(Int64,n+m) #parent node
+    Dsv=zeros(Int64,n+m)
+    mcyl=Inf #minimum cycle size 
+    cylend=zeros(Int64, 2)#,cycle endpoint
+    Nx=zeros(Int64,max(LH.mdC,LH.mdV)) #neighbors
+    nxl=0
+    R[sv]=1
+    Prnt[sv]=-1
+
+    Dsv[sv]=0
+    x=0 # this is the current node
+    isvar=true #this keeps track whether we are looking at variable or check nodes
+    #it is either 0 or n
+    sumr=sum(R[1:n])
+    while sumr > 0
+        if isvar #here we find an x in R
+            i=1
+            while i<=n #first we clear all entries in R due to variable nodes, then move on to check nodes
+                if R[i]==1
+                    x=i
+                    S[i]=1
+                    R[i]=0
+                    i=n+1
+                    Nx[:]=0
+                    nxl=LH.dV[x]
+                    Nx[1:nxl]=round(Int64,LH.VtoC[x,1:nxl,1])+n
+                else
+                    i+=1
+                end
+            end
+        else
+            i=n+1
+            while i<=n+m
+                if R[i]==1
+                    x=i
+                    S[i]=1
+                    R[i]=0
+                    i=n+m+1
+                    Nx[:]=0
+                    nxl=LH.dC[x-n]
+                    Nx[1:nxl]=round(Int64,LH.CtoV[x-n,1:nxl,1])
+                else
+                    i+=1
+                end
+            end
+        end
+        
+        if maxc >=4
+            if  Dsv[x]+1 > maxc
+                return maxc
+            end
+             
+        end
+        
+        for y in setdiff(Nx[1:nxl],Prnt[x])
+            
+            if S[y]==0
+                Prnt[y]=x
+                Dsv[y]=Dsv[x]+1
+                R[y]=1
+                
+            else
+                tem=mcyl
+                mcyl=round(Int64,min(mcyl,Dsv[x]+Dsv[y]+1))
+                
+                if tem != mcyl
+                    cylend[1]=y
+                    cylend[2]=x
+                end
+                if mcyl == 4 #if we find a 4-cycle, time to stop.
+                    R[:]=0
+                    break
+                end
+            end
+        
+        end
+        
+        if isvar
+            sumr=sum(R[1:n])
+            
+        else
+            sumr=sum(R[n+1:n+m])
+        end
+        
+        if sumr==0
+            isvar= ~isvar
+            if isvar
+                sumr=sum(R[1:n])
+            else
+                sumr=sum(R[n+1:n+m])
+            end
+        end
+        
+    end
+    
+    cycle=zeros(Int64,mcyl)
+    tem=cylend[1]    
+    for i=Dsv[cylend[2]]+2:(mcyl)
+        cycle[i]=tem
+        tem=Prnt[tem]
+    end
+    
+    tem=cylend[2]
+    for i=Dsv[tem]+1:-1:1
+        cycle[i]=tem
+        tem=Prnt[tem]
+    end
+    
+    return cycle
+    
+end
+function calc_mcycle(LH::ldpcH,sv::Int64)
+    return calc_mcycle(LH,sv,LH.n)
+    
+end
+
+
+
+function calc_girth(LH::ldpcH)
+    n=LH.n
+    cgirth=n*ones(Int64,LH.n+LH.m) # stores current shortest path for each variable node 
+    minc=Inf
+    for i=1:n
+        tem=calc_mcycle(LH,i,cgirth[i])
+        tg=length(tem)
+        if tg != 1
+        for j=1:tg
+            cgirth[tem[j]]=min(tg,cgirth[tem[j]])
+        end
+        
+        minc=min(tg,minc)
+        end
+    end
+    return Int(minc)
+    
+end
+
 #####calculate lambda and rho, i.e. degree distributions
 function calc_lamrho{T<:Integer}(dV::Array{T,1})
     cur=1
@@ -698,13 +848,14 @@ end
 
 
 #puts LH into the Rudiger/Urbanke (RU) form specified in  Efficient Encoding of Low-Density Parity-Check Codes
+############################################################################################
 function calc_RU(LHo::ldpcH,tgap::Int64)
     LH=deepcopy(LHo)
     n=LH.n
     tem1=0.0
     tem2=0.0
     ldiag=0
-    LH.ruperm=[1:n]
+    LH.ruperm=collect(1:n)
 
     #############first we estimate the expected gap########
     lam=calc_lamrho(LH.dV)
@@ -719,7 +870,7 @@ function calc_RU(LHo::ldpcH,tgap::Int64)
     for i=1:size(lam)[1]
         tem2+= lam[i,1]/(lam[i,2]+1)
     end
-    maxit=100 #this is the maximum #of iterations before increasing tgap
+    maxit=5 #this is the maximum #of iterations before increasing tgap
     #i.e. say you put tgap =0, it is is possible this program would run for years to come
     #thus after maxit, we do tgap+=1, eventually it will stop
     its=0
@@ -732,74 +883,78 @@ function calc_RU(LHo::ldpcH,tgap::Int64)
     ##########
     g=2*tgap
     ulA=0
-    
+    te=0
     while g > tgap
-    
-    #[0] Initialization
-    #start of the A~ in initialization step
-    icols=rand(Bernoulli(1.0-et),n)
-    ulA=sum(icols)+1
-    k=0
-    for i=1:n
-        if icols[i]==1
-            k+=1
-            swap_col(LH,k,i)
-                
-            c1=k
-            c2=i
-            fc1=find(LH.ruperm .== c1)
-            fc2=find(LH.ruperm .== c2)
+        #[0] Initialization
+        #start of the A~ in initialization step
+        icols=rand(Bernoulli((1.0-et)*0.95),n)
+        ulA=sum(icols)+1
+        k=0
+        for i=1:n
+            if icols[i]==1
+                k+=1
+                swap_col(LH,k,i)
                     
-            LH.ruperm[fc1],LH.ruperm[fc2]=LH.ruperm[fc2],LH.ruperm[fc1]
-        end
-    end
-    #now after each iteration A~ (in LH) starts at column ulA + ldiag and row ldiag+1
-    ldiag=0 #length of the diagonal of found ones 
-    kcnt=1 #of known columns
-    k=1
-        
-        
-    ##############################################
-    while kcnt >0 && (ulA + ldiag) <=n 
-        kcnt=0
-        for i=(ulA+ldiag):n #find "known" columns, i.e. columns with only one 1, to the right of (ulA+ldiag)
-            k=1
-
-            tem=sort(LH.VtoC[i,1:LH.dV[i],1],2)
-            while k <= LH.dV[i] 
-                #for column i, see if row tem[k] has one 1 to the right of ulA+ldiag-1
-                if length(find( LH.CtoV[ tem[k],:,1] .>= (ulA+ldiag))  ) == 1 
-                    kcnt+=1
-     
-                    
-                    #now we have a known column and must do row and column permutations
-                    c1=(kcnt-1)+(ulA+ldiag)
-                    c2=i
-                    
-                    fc1=find(LH.ruperm .== c1)
-                    fc2=find(LH.ruperm .== c2)
-                    LH.ruperm[fc1],LH.ruperm[fc2]=LH.ruperm[fc2],LH.ruperm[fc1]
-
-                    swap_col(LH,int(c1),int(c2))
-                    swap_row(LH, int(kcnt + ldiag), int(tem[k]) ) 
-                    k=LH.dV[i]+1
-
-                else
-                    k+=1
-                end
+                c1=k
+                c2=i
+                fc1=find(LH.ruperm .== c1)
+                fc2=find(LH.ruperm .== c2)
+                        
+                LH.ruperm[fc1],LH.ruperm[fc2]=LH.ruperm[fc2],LH.ruperm[fc1]
             end
         end
-        ldiag+=kcnt 
-    end
-    
+        #now after each iteration A~ (in LH) starts at column ulA + ldiag and row ldiag+1
+        ldiag=0 #length of the diagonal of found ones 
+        kcnt=1 #of known columns
+        k=1
+            
+            
+        ##############################################
+        while kcnt >0 && (ulA + ldiag) <=n 
+            kcnt=0
+            for i=(ulA+ldiag):n #find "known" columns, i.e. columns with only one 1, to the right of (ulA+ldiag)
+                k=1
 
+                tem=sort(LH.VtoC[i,1:LH.dV[i],1],2)
+                while k <= LH.dV[i] 
+                    #for column i, see if row tem[k] has one 1 to the right of ulA+ldiag-1
+                    if length(find( LH.CtoV[ tem[k],:,1] .>= (ulA+ldiag))  ) == 1 
+                        kcnt+=1
+         
+                        
+                        #now we have a known column and must do row and column permutations
+                        c1=(kcnt-1)+(ulA+ldiag)
+                        c2=i
+                        
+                        fc1=find(LH.ruperm .== c1)
+                        fc2=find(LH.ruperm .== c2)
+                        LH.ruperm[fc1],LH.ruperm[fc2]=LH.ruperm[fc2],LH.ruperm[fc1]
+
+                        swap_col(LH,Int(c1),Int(c2))
+                        swap_row(LH, Int(kcnt + ldiag), Int(tem[k]) ) 
+                        k=LH.dV[i]+1
+
+                    else
+                        k+=1
+                    end
+                end
+            end
+            ldiag+=kcnt 
+        end
         
-    g=LH.m- ldiag
-    its+=1
+            
+        g=LH.m- ldiag
+        if g >tgap
+            LH=deepcopy(LHo)
+            LH.ruperm=collect(1:n)
+
+        end
+        its+=1
         if its > maxit
             its=0
             tgap+=1
         end
+        te+=1
     end
     
     println("The theoretically achievable gap is $gap, and the resulting gap is $(LH.m- ldiag).")
@@ -826,7 +981,7 @@ function calc_RU(LHo::ldpcH,tgap::Int64)
     #######################################################################################
     #now we use Gaussian Elimination to clear E
     kcnt=0
-    phin=zeros(Uint8, int(gap), n)
+    phin=zeros(Uint8, Int(gap), n)
     #first we initialize the matrix [C D E]
     for i=1:gap
         #look at row LH.m-gap+i
@@ -894,6 +1049,8 @@ function calc_RU(LHo::ldpcH,tgap::Int64)
     LH.phin=minvmod(phin,2) #we set phi^(-1) as a precomputation
     return LH
 end
+
+############################################################################################
 
 #given a ldpcH in RU form and phi^(-1) it encodes sk using the RU method
 function ldpcRUenc{T<:Integer}(LH::ldpcH,sk::Array{T,1})
@@ -1066,7 +1223,7 @@ function bsc_MPD(xn,p,LH::ldpcH,maxi)
     end
     
     mVtoC=zeros(Float64,n,LH.mdV)
-    mCtoV=zeros(Float64,k,LH.mdC)
+    mCtoV=zeros(Float64,m,LH.mdC)
     
    
     for iter=1:maxi
@@ -1155,7 +1312,7 @@ function biawgn_MPD(xn,vr,LH::ldpcH,maxi)
     temm=0
   
     mVtoC=zeros(Float64,n,LH.mdV)
-    mCtoV=zeros(Float64,k,LH.mdC)
+    mCtoV=zeros(Float64,m,LH.mdC)
     
    
     for iter=1:maxi
