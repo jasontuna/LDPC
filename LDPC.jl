@@ -567,7 +567,7 @@ function calc_girth(LH::ldpcH)
         minc=min(tg,minc)
         end
     end
-    return Int(minc)
+    return convert(Int64,minc)
     
 end
 
@@ -819,7 +819,7 @@ end
 
 
 #swaps rows in ldpcH type
-function swap_row(LH::ldpcH,i::Int64,j::Int64)
+function swap_row(LH::ldpcH,i,j)
     for k=1:LH.dC[i]
         LH.VtoC[ LH.CtoV[i,k,1] , LH.CtoV[i,k,2] ,1] = j
         LH.VtoC[ LH.CtoV[i,k,1] , LH.CtoV[i,k,2] ,2] = k
@@ -832,7 +832,7 @@ function swap_row(LH::ldpcH,i::Int64,j::Int64)
     LH.CtoV[i,:,:],LH.CtoV[j,:,:]=LH.CtoV[j,:,:],LH.CtoV[i,:,:]
 end
 #swaps columns in ldpcH type
-function swap_col(LH::ldpcH,i::Int64,j::Int64)
+function swap_col(LH::ldpcH,i,j)
     for k=1:LH.dV[i]
         LH.CtoV[ LH.VtoC[i,k,1] , LH.VtoC[i,k,2] ,1] = j
             LH.CtoV[ LH.VtoC[i,k,1] , LH.VtoC[i,k,2] ,2] = k
@@ -930,8 +930,8 @@ function calc_RU(LHo::ldpcH,tgap::Int64)
                         fc2=find(LH.ruperm .== c2)
                         LH.ruperm[fc1],LH.ruperm[fc2]=LH.ruperm[fc2],LH.ruperm[fc1]
 
-                        swap_col(LH,Int(c1),Int(c2))
-                        swap_row(LH, Int(kcnt + ldiag), Int(tem[k]) ) 
+                        swap_col(LH,c1,c2)
+                        swap_row(LH, kcnt + ldiag, tem[k] ) 
                         k=LH.dV[i]+1
 
                     else
@@ -981,7 +981,7 @@ function calc_RU(LHo::ldpcH,tgap::Int64)
     #######################################################################################
     #now we use Gaussian Elimination to clear E
     kcnt=0
-    phin=zeros(Uint8, Int(gap), n)
+    phin=zeros(Uint8, gap, n)
     #first we initialize the matrix [C D E]
     for i=1:gap
         #look at row LH.m-gap+i
