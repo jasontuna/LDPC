@@ -61,7 +61,7 @@ end
 #Binary Erasure Channel
 function bec(p::Float64,cws)
     n=length(cws)
-    out=zeros(Float64,n,1)
+    out=zeros(Float64,n)
     D=rand(Bernoulli(p),n)
     for i=1:n
         if D[i]==1
@@ -76,7 +76,7 @@ end
 #Binary Symmetric Channel
 function bsc(p::Float64,cws)
     n=length(cws)
-    out=zeros(Float64,n,1)
+    out=zeros(Float64,n)
     D=rand(Bernoulli(p),n)
     for i=1:n
         if D[i]==1
@@ -91,11 +91,11 @@ end
 
 
 #Binary Deletion Channel
-function bdc(d::Float64,cws,dpos)
+function bdc{T<:Integer}(d::Float64,cws::Array{T,1},dpos)
     n=length(cws)
     D=rand(Bernoulli(d),n)
     L=n-sum(D)
-    out=zeros(Float64,L,1)
+    out=zeros(T,L)
     j=1
     for i=1:n
         dpos[i]=D[i]
@@ -222,10 +222,10 @@ type ldpcH
     #does not always succeed, so might need ot be called multiple times
     #it works by randomly choosing variable node, based on the number of uninitialized edges
     #then we randomly choose a check node based on the number of uninitialized edges
-    # but we make sure it does not result in a 4-cycle
+    # but we make sure it does not result in a 4-cycle if g6 is true, otw 4 cycles are ok
     #it returns false if there are any issues, like having an even variable node degree, etc...
     
-    function ldpcH(dV,dC) 
+    function ldpcH(dV,dC,g6::Bool) 
         T=new()
         T.n=size(dV)[1]
         T.m=size(dC)[1]
@@ -237,16 +237,16 @@ type ldpcH
         T.mdV=maximum(T.dV)
         T.CtoV=zeros(Uint32,T.m,T.mdC,2)
         T.VtoC=zeros(Uint32,T.n,T.mdV,2)
-        #CtoV(i,cnt,1)=j jth variable node connected to check node i
-        #CtoV(i,cnt,2)   such that VtoC[ CtoV[i,cnt,1] , CtoV(i,cnt,2) ,1] = i
+        #CtoV[i,cnt,1]=j jth variable node connected to check node i
+        #and we have VtoC[ CtoV[i,cnt,1] , CtoV[i,cnt,2] ,1] = i
         #vice-versa for VtoC
         T.htype="null"
         T.isG==false
         #############randomly add edges and check if they are valid##############
         cnt=0
-        pv=zeros(Int64,T.n,1)
-        Cc=zeros(Int64,T.m,1)
-        pc=zeros(Int64,T.m,1)
+        pv=zeros(Int64,T.n)
+        Cc=zeros(Int64,T.m)
+        pc=zeros(Int64,T.m)
         #first we come up with a probability distribution(actually more like a CDF) for the check nodes,
         pv[1]=dV[1]
         for i=2:T.n
@@ -255,7 +255,7 @@ type ldpcH
         
         #########################################################################
         totedges=pv[T.n] #T is the total # of edges to add
-        ttem=zeros(Int64,T.n,1)
+        ttem=zeros(Int64,T.n)
         i=1
         vn=0
         
@@ -275,14 +275,25 @@ type ldpcH
        
         
             tem=0
-            for j=setdiff((1:T.m),T.VtoC[vn,:,1]) #cycle through all check nodes not connected to vn to find possible check nodes
-                if (T.CtoV[j,dC[j],1] == 0) #make sure the check node does not have its max # of edges 
-                    pc[j]=dC[j]-Cc[j]+tem
-                    tem=pc[j]
+            sdiff=setdiff((1:T.m),T.VtoC[vn,:,1]) #cycle through all check nodes not connected to vn to find possible check nodes
+            cnt=1
+            for j=1:T.m
+                if sdiff[cnt]==j 
+                    if(T.CtoV[j,dC[j],1] == 0)
+                        pc[j]=dC[j]-Cc[j]+tem
+                        tem=pc[j]
+                    else
+                        pc[j]=tem
+                    end
+                    cnt+=1
+                    if cnt > length(sdiff)
+                        cnt=1
+                    end
                 else
                     pc[j]=tem
                 end
             end
+            
             
             if pc[T.m] <  1
                 println("We were unable to find a successful checknode, err(1)")
@@ -300,20 +311,24 @@ type ldpcH
                 j=1
                 cnt=1
                 
-                if T.VtoC[vn,1] != 0 #if vn is connected to any check nodes, we must check whether adding cn will introduce a 4-cycle
-                    while j <= dV[vn]
+                #if vn is connected to any check nodes, we must check whether adding cn will introduce a 4-cycle
+                while j <= dV[vn]
                     
-                        if T.VtoC[vn,j] == 0
+                    if T.VtoC[vn,j,1] == 0
                             cnt=j
                             j=dV[vn]+1
-                        elseif length(setdiff(intersect(T.CtoV[cn,:,1], T.CtoV[T.VtoC[vn,j],:,1]  ),0))>0 #convoluted but works for now...
+                    elseif j==dV[vn]
+                            println("test1")
+                            gcn=false
+                    elseif g6 && length(setdiff(intersect(T.CtoV[cn,:,1], T.CtoV[T.VtoC[vn,j],:,1]  ),0))>0 #convoluted but works for now...
                             gcn=false
                             j=dV[vn]+1
-                        else
+                    else
                             j+=1
-                        end
-                    end 
-                end
+                    end
+                    
+                end 
+              
                 
                 
                 
@@ -321,6 +336,10 @@ type ldpcH
                     T.VtoC[vn,cnt,1]=cn
                     
                     Cc[cn]+=1
+                    if Cc[cn] > dC[cn]
+                        println("$(T.CtoV[cn,dC[cn],1] ) checknode error $cn $vn")
+                        return
+                    end
                     T.VtoC[vn,cnt,2]=Cc[cn]
                     T.CtoV[cn,Cc[cn],1]=vn
                     T.CtoV[cn,Cc[cn],2]=cnt
@@ -389,7 +408,7 @@ type ldpcH
         end
                 
         
-        chkcnts=zeros(Int64,T.m,1) #keeps track of number of variable nodes connected in loop
+        chkcnts=zeros(Int64,T.m) #keeps track of number of variable nodes connected in loop
         for i=1:T.n #references variable nodes
             a=readline(f)
             lar=readdlm(IOBuffer(a),Int)
@@ -804,11 +823,11 @@ function lc_end(inp, G)
     n=size(G)[2]
     re=ni%k
     if re !=0 
-        inp=vcat(inp,zeros(Float64,k-re,1))
+        inp=vcat(inp,zeros(Float64,k-re))
         ni=length(inp)
     end
     ncw=int64(ni/k)
-    cws=zeros(Float64,n*ncw,1)
+    cws=zeros(Float64,n*ncw)
     for i=1:ncw
         cws[(i-1)*n+1:n*i]=copy(inp[(i-1)*k+1:k*i]'*G %2) 
     end
@@ -1161,8 +1180,8 @@ function bec_MPD(xn,LH::ldpcH,maxi)
     n=LH.n
     m=LH.m
     
-    u0=zeros(Float64,n,1) # set the llr messages
-    gdcm=ones(Uint8,m,1)
+    u0=zeros(Float64,n) # set the llr messages
+    gdcm=ones(Uint8,m)
     jj=0
  
     u0=copy(xn)
